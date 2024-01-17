@@ -103,7 +103,11 @@ def load_balancing_loss_func(gate_logits: torch.Tensor, num_experts: torch.Tenso
 
     _, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
 
+    # treat `top_k` as tokens (shape is `top_k X [batch_size X sequence_length]`)
+    selected_experts = selected_experts.reshape(-1)
+
     expert_mask = torch.nn.functional.one_hot(selected_experts, num_experts)
+    expert_mask = torch.max(expert_mask, dim=-2).values
 
     # Compute the percentage of tokens routed to each experts
     tokens_per_expert = torch.mean(expert_mask.float(), dim=0)
@@ -111,7 +115,7 @@ def load_balancing_loss_func(gate_logits: torch.Tensor, num_experts: torch.Tenso
     # Compute the average probability of routing to these experts
     router_prob_per_expert = torch.mean(routing_weights, dim=0)
 
-    overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0))
+    overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(-1))
     return overall_loss * num_experts
 
 
@@ -246,8 +250,8 @@ class MixtralAttention(nn.Module):
         self.layer_idx = layer_idx
         if layer_idx is None:
             logger.warning_once(
-                f"Instantiating {self.__class__.__name__} without passing a `layer_idx` is not recommended and will "
-                "lead to errors during the forward call if caching is used. Please make sure to provide a `layer_idx` "
+                f"Instantiating {self.__class__.__name__} without passing `layer_idx` is not recommended and will "
+                "to errors during the forward call, if caching is used. Please make sure to provide a `layer_idx` "
                 "when creating this class."
             )
 
@@ -846,8 +850,8 @@ class MixtralDecoderLayer(nn.Module):
         self.hidden_size = config.hidden_size
 
         self.self_attn = MIXTRAL_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx)
-
-        self.block_sparse_moe = MixtralSparseMoeBlock(config)
+        self.moe_layer = layer_idx % config.moe_layer_frequency == (config.moe_layer_frequency - 1)
+        self.block_sparse_moe = MixtralSparseMoeBlock(config) if self.moe_layer else MixtralBLockSparseTop2MLP(config)
         self.input_layernorm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -901,7 +905,10 @@ class MixtralDecoderLayer(nn.Module):
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states, router_logits = self.block_sparse_moe(hidden_states)
+        if self.moe_layer:
+            hidden_states, router_logits = self.block_sparse_moe(hidden_states)
+        else:
+            hidden_states = self.block_sparse_moe(hidden_states)
         hidden_states = residual + hidden_states
 
         outputs = (hidden_states,)
@@ -1202,7 +1209,8 @@ class MixtralModel(MixtralPreTrainedModel):
 
             if output_router_logits:
                 all_router_logits += (layer_outputs[-1],)
-
+        # print(hidden_states)
+        # exit()
         hidden_states = self.norm(hidden_states)
 
         # add hidden states from the last decoder layer
@@ -1211,7 +1219,7 @@ class MixtralModel(MixtralPreTrainedModel):
 
         next_cache = None
         if use_cache:
-            next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
+            next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache and hasattr(next_decoder_cache, 'to_legacy_cache') else next_decoder_cache
 
         if not return_dict:
             return tuple(
@@ -1229,7 +1237,7 @@ class MixtralModel(MixtralPreTrainedModel):
 
 
 class MixtralForCausalLM(MixtralPreTrainedModel):
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = []#["lm_head.weight"]
 
     def __init__(self, config):
         super().__init__(config)
@@ -1291,8 +1299,8 @@ class MixtralForCausalLM(MixtralPreTrainedModel):
         ```python
         >>> from transformers import AutoTokenizer, MixtralForCausalLM
 
-        >>> model = MixtralForCausalLM.from_pretrained("mistralai/Mixtral-8x7B-v0.1")
-        >>> tokenizer = AutoTokenizer.from_pretrained("mistralai/Mixtral-8x7B-v0.1")
+        >>> model = MixtralForCausalLM.from_pretrained(PATH_TO_CONVERTED_WEIGHTS)
+        >>> tokenizer = AutoTokenizer.from_pretrained(PATH_TO_CONVERTED_TOKENIZER)
 
         >>> prompt = "Hey, are you conscious? Can you talk to me?"
         >>> inputs = tokenizer(prompt, return_tensors="pt")
