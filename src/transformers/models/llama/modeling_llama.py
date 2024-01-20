@@ -1080,7 +1080,13 @@ class LlamaModel(LlamaPreTrainedModel):
             hidden_states = layer_outputs[0]
 
             if use_cache:
-                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+                if hasattr(layer_outputs[2 if output_attentions else 1], 'to_legacy_cache'):
+                    next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+                else:
+                    if next_decoder_cache is None:
+                        next_decoder_cache = [layer_outputs[2 if output_attentions else 1]]
+                    else:
+                        next_decoder_cache.append(layer_outputs[2 if output_attentions else 1])
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
