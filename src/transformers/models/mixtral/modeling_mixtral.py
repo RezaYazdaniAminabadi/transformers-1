@@ -270,10 +270,10 @@ class MixtralAttention(nn.Module):
                 f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
                 f" and `num_heads`: {self.num_heads})."
             )
-        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
-        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
+        self.q_proj = nn.Linear(self.hidden_size, self.num_heads // config.tp_size * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads // config.tp_size * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads // config.tp_size * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(self.num_heads // config.tp_size * self.head_dim, self.hidden_size, bias=False)
 
         self.rotary_emb = MixtralRotaryEmbedding(
             self.head_dim,
@@ -762,9 +762,9 @@ class MixtralBLockSparseTop2MLP(nn.Module):
         self.ffn_dim = config.intermediate_size
         self.hidden_dim = config.hidden_size
 
-        self.w1 = nn.Linear(self.hidden_dim, self.ffn_dim, bias=False)
-        self.w2 = nn.Linear(self.ffn_dim, self.hidden_dim, bias=False)
-        self.w3 = nn.Linear(self.hidden_dim, self.ffn_dim, bias=False)
+        self.w1 = nn.Linear(self.hidden_dim, self.ffn_dim // config.tp_size, bias=False)
+        self.w2 = nn.Linear(self.ffn_dim // config.tp_size, self.hidden_dim, bias=False)
+        self.w3 = nn.Linear(self.hidden_dim, self.ffn_dim // config.tp_size, bias=False)
 
         self.act_fn = ACT2FN[config.hidden_act]
 
