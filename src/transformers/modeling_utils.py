@@ -2409,50 +2409,50 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
             for ignore_key in self._keys_to_ignore_on_save:
                 if ignore_key in state_dict.keys():
                     del state_dict[ignore_key]
-        if safe_serialization:
-            # Safetensors does not allow tensor aliasing.
-            # We're going to remove aliases before saving
-            ptrs = collections.defaultdict(list)
-            for name, tensor in state_dict.items():
-                # Sometimes in the state_dict we have non-tensor objects.
-                # e.g. in bitsandbytes we have some `str` objects in the state_dict
-                if isinstance(tensor, torch.Tensor):
-                    ptrs[id_tensor_storage(tensor)].append(name)
-                else:
-                    # In the non-tensor case, fall back to the pointer of the object itself
-                    ptrs[id(tensor)].append(name)
+        # if safe_serialization:
+        #     # Safetensors does not allow tensor aliasing.
+        #     # We're going to remove aliases before saving
+        #     ptrs = collections.defaultdict(list)
+        #     for name, tensor in state_dict.items():
+        #         # Sometimes in the state_dict we have non-tensor objects.
+        #         # e.g. in bitsandbytes we have some `str` objects in the state_dict
+        #         if isinstance(tensor, torch.Tensor):
+        #             ptrs[id_tensor_storage(tensor)].append(name)
+        #         else:
+        #             # In the non-tensor case, fall back to the pointer of the object itself
+        #             ptrs[id(tensor)].append(name)
 
-            # These are all the pointers of shared tensors.
-            shared_ptrs = {ptr: names for ptr, names in ptrs.items() if len(names) > 1}
-            warn_names = set()
-            for names in shared_ptrs.values():
-                # Removing the keys which are declared as known duplicates on
-                # load. This allows to make sure the name which is kept is consistent.
-                if self._tied_weights_keys is not None:
-                    found = 0
-                    for name in sorted(names):
-                        matches_pattern = any(re.search(pat, name) for pat in self._tied_weights_keys)
-                        if matches_pattern and name in state_dict:
-                            found += 1
-                            if found < len(names):
-                                del state_dict[name]
+        #     # These are all the pointers of shared tensors.
+        #     shared_ptrs = {ptr: names for ptr, names in ptrs.items() if len(names) > 1}
+        #     warn_names = set()
+        #     for names in shared_ptrs.values():
+        #         # Removing the keys which are declared as known duplicates on
+        #         # load. This allows to make sure the name which is kept is consistent.
+        #         if self._tied_weights_keys is not None:
+        #             found = 0
+        #             for name in sorted(names):
+        #                 matches_pattern = any(re.search(pat, name) for pat in self._tied_weights_keys)
+        #                 if matches_pattern and name in state_dict:
+        #                     found += 1
+        #                     if found < len(names):
+        #                         del state_dict[name]
 
-                # When not all duplicates have been cleaned, still remove those keys, but put a clear warning.
-                # If the link between tensors was done at runtime then `from_pretrained` will not get
-                # the key back leading to random tensor. A proper warning will be shown
-                # during reload (if applicable), but since the file is not necessarily compatible with
-                # the config, better show a proper warning.
-                found = 0
-                for name in names:
-                    if name in state_dict:
-                        found += 1
-                        if found > 1:
-                            del state_dict[name]
-                            warn_names.add(name)
-            if len(warn_names) > 0:
-                logger.warning_once(
-                    f"Removed shared tensor {warn_names} while saving. This should be OK, but check by verifying that you don't receive any warning while reloading",
-                )
+        #         # When not all duplicates have been cleaned, still remove those keys, but put a clear warning.
+        #         # If the link between tensors was done at runtime then `from_pretrained` will not get
+        #         # the key back leading to random tensor. A proper warning will be shown
+        #         # during reload (if applicable), but since the file is not necessarily compatible with
+        #         # the config, better show a proper warning.
+        #         found = 0
+        #         for name in names:
+        #             if name in state_dict:
+        #                 found += 1
+        #                 if found > 1:
+        #                     del state_dict[name]
+        #                     warn_names.add(name)
+        #     if len(warn_names) > 0:
+        #         logger.warning_once(
+        #             f"Removed shared tensor {warn_names} while saving. This should be OK, but check by verifying that you don't receive any warning while reloading",
+        #         )
 
         # Shard the model if it is too big.
         if not _hf_peft_config_loaded:
@@ -2488,7 +2488,8 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
             if safe_serialization:
                 # At some point we will need to deal better with save_function (used for TPU and other distributed
                 # joyfulness), but for now this enough.
-                safe_save_file(shard, os.path.join(save_directory, shard_file), metadata={"format": "pt"})
+                safe_save_file(shard, os.path.join(save_directory, 
+                                f"{shard_file.split('.')[0]}-tp_{(torch.distributed.get_rank() if torch.distributed.is_initialized() else 0):0>2d}.safetensors"), metadata={"format": "pt"})
             else:
                 save_function(shard, os.path.join(save_directory, shard_file))
 

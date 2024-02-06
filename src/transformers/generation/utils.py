@@ -92,6 +92,7 @@ logger = logging.get_logger(__name__)
 if is_accelerate_available():
     from accelerate.hooks import AlignDevicesHook, add_hook_to_module
 
+_generator = None
 
 @dataclass
 class GenerateDecoderOnlyOutput(ModelOutput):
@@ -2534,6 +2535,11 @@ class GenerationMixin:
         ['Today is a beautiful day, and we must do everything possible to make it a day of celebration.']
         ```"""
         # init values
+
+        global _generator
+        if _generator is None:
+            _generator = torch.Generator(device='cuda')
+            _generator.manual_seed(0)
         logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
         stopping_criteria = stopping_criteria if stopping_criteria is not None else StoppingCriteriaList()
         if max_length is not None:
@@ -2611,6 +2617,8 @@ class GenerationMixin:
             next_token_scores = logits_processor(input_ids, next_token_logits)
             next_token_scores = logits_warper(input_ids, next_token_scores)
 
+            rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+            # print(f'[{rank}] -> in generation loop: {input_ids.float().norm()} {next_token_logits.norm()} {next_token_scores.float().norm()}')
             # Store scores, attentions and hidden_states when required
             if return_dict_in_generate:
                 if output_scores:
@@ -2631,8 +2639,15 @@ class GenerationMixin:
 
             # sample
             probs = nn.functional.softmax(next_token_scores, dim=-1)
-            next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
 
+            # _rng_state = torch.cuda.get_rng_state().to(torch.cuda.current_device_name())
+            # dist.broadcast(_rng_state, 0)
+            # torch.cuda.set_rng_state(_rng_state.cpu())
+            
+            next_tokens = torch.multinomial(probs, num_samples=1, generator=_generator).squeeze(1)
+
+            # print(f'[{rank}] -> in generation loop: next_tokens {next_tokens} probs {probs.shape} {probs.norm()}')
+            
             # finished sentences should have their next token be a padding token
             if eos_token_id is not None:
                 if pad_token_id is None:
